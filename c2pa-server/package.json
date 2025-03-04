@@ -1,0 +1,33 @@
+{
+  "name": "c2pa-server",
+  "version": "1.0.0",
+  "description": "A server for signing content using C2PA and storing it in MinIO.",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "dependencies": {
+    "c2pa-node": "^0.5.23",
+    "dotenv": "^16.0.3",
+    "express": "^4.18.2",
+    "minio": "^8.0.4",
+    "node-fetch": "^3.3.1",
+    "swagger-jsdoc": "^6.2.5",
+    "swagger-ui-express": "^5.0.0",
+    "winston": "^3.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "author": "Your Name",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.13.9",
+    "ts-node": "^10.2.1",
+    "typescript": "^5.8.2",
+    "typescript-eslint": "^8.11.0"
+
+  }
+}

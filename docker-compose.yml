@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  minio:
+    image: minio/minio  # Use the official MinIO image
+    container_name: minio
+    ports:
+      - "9000:9000"  # MinIO API
+      - "9001:9001"  # MinIO Console
+    environment:
+      MINIO_ROOT_USER: minioadmin  
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - ./minio-server/data:/data  # Mount the data directory
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  c2pa:
+    build: ./c2pa-server
+    ports:
+      - "8080:8080"
+    depends_on:
+      minio:
+        condition: service_healthy
+
+volumes:
+  minio_data: 
