@@ -2,13 +2,16 @@ import express, { Request, Response } from "express";
 import { createC2pa, createTestSigner, ManifestBuilder } from "c2pa-node";
 import logger from "./logger";
 import * as Minio from 'minio'
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 const minioClient = new Minio.Client({
-  endPoint: 'minio',
-  port: 9000,
+  endPoint: process.env.MINIO_ENDPOINT || 'localhost',
+  port: parseInt(process.env.MINIO_PORT || '9000'),
   useSSL: false,
-  accessKey: 'minioadmin',
-  secretKey: 'minioadmin',
+  accessKey: process.env.MINIO_ROOT_USER || 'minioadmin',
+  secretKey: process.env.MINIO_ROOT_PASSWORD || 'minioadmin',
 })
 
 const app = express();
