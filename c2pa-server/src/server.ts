@@ -19,6 +19,27 @@ app.use(express.json());
 
 const BUCKET = process.env.MINIO_BUCKET || 'ov-content-manager-uploads';
 
+// Load base URL from environment variable
+const BASE_URL = process.env.BASE_URL || 'http://storage.ov.box'; // Default value if not set
+
+// In-memory store for presigned URLs
+const urlStore: { [key: string]: { url: string; expiresAt: number } } = {};
+
+// Function to generate a unique URI
+function generateUniqueURI(): string {
+  return `uri-${Date.now()}`; // Simple unique identifier based on timestamp
+}
+
+// Middleware to clean up expired URLs
+setInterval(() => {
+  const now = Date.now();
+  for (const key in urlStore) {
+    if (urlStore[key].expiresAt < now) {
+      delete urlStore[key];
+    }
+  }
+}, 60000); // Check every minute
+
 // Helper: Convert MinIO Stream to Buffer
 function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -128,7 +149,9 @@ app.post("/get_upload_url", async (req: Request, res: Response) => {
   console.log("get_upload_url", fileName);
   try {
     const upload_url = await minioClient.presignedPutObject(BUCKET, fileName, 60);
-    res.json({ upload_url });
+    const uniqueURI = generateUniqueURI();
+    urlStore[uniqueURI] = { url: upload_url, expiresAt: Date.now() + 15 * 60 * 1000 }; // Store for 15 minutes
+    res.json({ upload_url: `${BASE_URL}/upload/${uniqueURI}` });
   } catch (error) {
     logger.error("Error getting presigned url: " + (error as Error).message);
     res.status(500).json({ error: "Presigned url retrieval failed" });
@@ -139,7 +162,9 @@ app.get("/get_download_url", async (req: Request, res: Response) => {
   const { fileName } = req.body;
   try {
     const download_url = await minioClient.presignedGetObject(BUCKET, fileName, 60);
-    res.json({ download_url });
+    const uniqueURI = generateUniqueURI();
+    urlStore[uniqueURI] = { url: download_url, expiresAt: Date.now() + 15 * 60 * 1000 }; // Store for 15 minutes
+    res.json({ download_url: `${BASE_URL}/download/${uniqueURI}` });
   } catch (error) {
     logger.error("Error getting presigned url: " + (error as Error).message);
     res.status(500).json({ error: "Presigned url retrieval failed" });
@@ -155,6 +180,26 @@ app.get("/", (req: Request, res: Response) => {
   res.json({ message: "C2PA Server is running" });
 });
 
+// New endpoint to handle redirects
+app.get("/upload/:uri", (req: Request, res: Response) => {
+  const { uri } = req.params;
+  const entry = urlStore[uri];
+  if (entry) {
+    res.redirect(entry.url);
+  } else {
+    res.status(404).json({ error: "Upload URL not found or expired" });
+  }
+});
+
+app.get("/download/:uri", (req: Request, res: Response) => {
+  const { uri } = req.params;
+  const entry = urlStore[uri];
+  if (entry) {
+    res.redirect(entry.url);
+  } else {
+    res.status(404).json({ error: "Download URL not found or expired" });
+  }
+});
 
 // Start Server
 app.listen(8080, async () => {
