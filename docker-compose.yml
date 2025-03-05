@@ -1,15 +1,15 @@
 services:
   minio:
-    image: minio/minio  # Use the official MinIO image
+    image: minio/minio
     container_name: minio
     ports:
-      - "9000:9000"  # MinIO API
-      - "9001:9001"  # MinIO Console
+      - "9000:9000"
+      - "9001:9001"
     environment:
       MINIO_ROOT_USER: minioadmin  
       MINIO_ROOT_PASSWORD: minioadmin
     volumes:
-      - ./minio-server/data:/data  # Mount the data directory
+      - ./minio-server/data:/data
     command: server /data --console-address ":9001"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
@@ -25,5 +25,6 @@ services:
       minio:
         condition: service_healthy
 
-volumes:
-  minio_data: 
+networks:
+  c2pa-network:
+    driver: bridge

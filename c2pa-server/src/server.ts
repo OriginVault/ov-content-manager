@@ -1,15 +1,23 @@
-import express, { Request, Response } from "express";
+import express, { Request, Response, NextFunction } from "express";
 import { createC2pa, createTestSigner, ManifestBuilder } from "c2pa-node";
 import logger from "./logger";
 import * as Minio from 'minio'
 import dotenv from 'dotenv';
+import multer from 'multer'; // Import multer for handling file uploads
+import cors from 'cors';
+import expressRateLimit from 'express-rate-limit';
 
 dotenv.config();
 
+// Extend the Request interface to include the file property
+interface MulterRequest extends Request {
+  file: any;
+}
+
 const minioClient = new Minio.Client({
-  endPoint: process.env.MINIO_ENDPOINT || 'localhost',
+  endPoint: process.env.MINIO_ENDPOINT || 'minio',
   port: parseInt(process.env.MINIO_PORT || '9000'),
-  useSSL: false,
+  useSSL: true,
   accessKey: process.env.MINIO_ROOT_USER || 'minioadmin',
   secretKey: process.env.MINIO_ROOT_PASSWORD || 'minioadmin',
 })
@@ -17,18 +25,23 @@ const minioClient = new Minio.Client({
 const app = express();
 app.use(express.json());
 
-const BUCKET = process.env.MINIO_BUCKET || 'ov-content-manager-uploads';
+// Use the cors middleware
+app.use((req, res, next) => {
+    const allowedOrigin = req.headers.origin;
+    res.header("Access-Control-Allow-Origin", allowedOrigin);
+    res.header("Access-Control-Allow-Credentials", "true");
+    res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE");
+    res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
+    next();
+});
 
-// Load base URL from environment variable
-const BASE_URL = process.env.BASE_URL || 'http://storage.ov.box'; // Default value if not set
+// Handle preflight requests
+app.options('*', cors());
+
+const BUCKET = process.env.MINIO_BUCKET || 'ov-content-manager-uploads';
 
 // In-memory store for presigned URLs
 const urlStore: { [key: string]: { url: string; expiresAt: number } } = {};
-
-// Function to generate a unique URI
-function generateUniqueURI(): string {
-  return `uri-${Date.now()}`; // Simple unique identifier based on timestamp
-}
 
 // Middleware to clean up expired URLs
 setInterval(() => {
@@ -49,6 +62,38 @@ function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
     stream.on("error", reject);
   });
 }
+
+// Set up rate limiting
+const limiter = expressRateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per `window` (here, per 15 minutes)
+  standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
+  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+});
+
+// Apply the rate limiting middleware to all requests
+app.use(limiter as any);
+
+// Create a specific rate limiter for upload-related routes
+const uploadLimiter = expressRateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // Limit each IP to 10 requests per `window` (here, per 15 minutes)
+  standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
+  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+});
+
+// Apply the upload limiter to the specific routes
+app.post("/request-upload-url", uploadLimiter as any, async (req: Request, res: Response) => {
+  const { fileName } = req.body;
+
+  try {
+    const upload_url = await minioClient.presignedPutObject(BUCKET, fileName, 60);
+    res.json({ upload_url });
+  } catch (error) {
+    logger.error("Error getting presigned url: " + (error as Error).message);
+    res.status(500).json({ error: "Presigned url retrieval failed" });
+  }
+});
 
 // C2PA Signing Endpoint
 app.post("/sign", async (req: Request, res: Response) => {
@@ -75,7 +120,7 @@ app.post("/sign", async (req: Request, res: Response) => {
 
     // Provide the required arguments to ManifestBuilder
     const manifest = new ManifestBuilder({
-      claim_generator: 'my-app/1.0.0',
+      claim_generator: 'ov-content-manager/1.0.0',
       format: 'image/jpeg',
       title: 'Test Manifest',
       assertions: [
@@ -104,7 +149,7 @@ app.post("/sign", async (req: Request, res: Response) => {
     // Upload signed file securely
     const signedFileName = `signed-${fileName}`;
     const uploadUrl = await minioClient.presignedPutObject(BUCKET, signedFileName, 60);
-    await fetch(uploadUrl, { method: "PUT", body: JSON.stringify(signedBuffer) });
+    await fetch(uploadUrl, { method: "POST", body: JSON.stringify(signedBuffer) });
 
     logger.info(`Signed file ${signedFileName} uploaded successfully`);
 
@@ -144,27 +189,11 @@ app.get("/bucket_exists", async (req: Request, res: Response) => {
   res.json(bucket);
 });
 
-app.post("/get_upload_url", async (req: Request, res: Response) => {
-  const { fileName } = req.body;
-  console.log("get_upload_url", fileName);
-  try {
-    const upload_url = await minioClient.presignedPutObject(BUCKET, fileName, 60);
-    const uniqueURI = generateUniqueURI();
-    urlStore[uniqueURI] = { url: upload_url, expiresAt: Date.now() + 15 * 60 * 1000 }; // Store for 15 minutes
-    res.json({ upload_url: `${BASE_URL}/upload/${uniqueURI}` });
-  } catch (error) {
-    logger.error("Error getting presigned url: " + (error as Error).message);
-    res.status(500).json({ error: "Presigned url retrieval failed" });
-  }
-});
-
-app.get("/get_download_url", async (req: Request, res: Response) => {
+app.post("/request-download-url", async (req: Request, res: Response) => {
   const { fileName } = req.body;
   try {
     const download_url = await minioClient.presignedGetObject(BUCKET, fileName, 60);
-    const uniqueURI = generateUniqueURI();
-    urlStore[uniqueURI] = { url: download_url, expiresAt: Date.now() + 15 * 60 * 1000 }; // Store for 15 minutes
-    res.json({ download_url: `${BASE_URL}/download/${uniqueURI}` });
+    res.json({ download_url });
   } catch (error) {
     logger.error("Error getting presigned url: " + (error as Error).message);
     res.status(500).json({ error: "Presigned url retrieval failed" });
@@ -180,24 +209,72 @@ app.get("/", (req: Request, res: Response) => {
   res.json({ message: "C2PA Server is running" });
 });
 
-// New endpoint to handle redirects
-app.get("/upload/:uri", (req: Request, res: Response) => {
+// Set up multer for file uploads
+const upload = multer({ storage: multer.memoryStorage() }); // Store files in memory
+
+// Update the upload endpoint to use the upload limiter
+app.post("/upload/:uri", uploadLimiter as any, upload.single('file'), async (req: Request, res: Response): Promise<void> => {
   const { uri } = req.params;
   const entry = urlStore[uri];
-  if (entry) {
-    res.redirect(entry.url);
-  } else {
+
+  if (!entry) {
     res.status(404).json({ error: "Upload URL not found or expired" });
+    return; // Ensure the function returns void
+  }
+
+  try {
+    // Use a type assertion to inform TypeScript that req is a MulterRequest
+    const file = (req as MulterRequest).file;
+
+    // Upload the file to MinIO using the presigned URL
+    const uploadResponse = await fetch(entry.url, {
+      method: "POST",
+      body: file.buffer,
+      headers: {
+        'Content-Type': file.mimetype,
+      },
+    });
+
+    if (!uploadResponse.ok) {
+      throw new Error("Failed to upload file to MinIO");
+    }
+
+    res.json({ message: "File uploaded successfully!", uploadResponse });
+  } catch (error) {
+    logger.error("Error uploading file: " + (error as Error).message);
+    res.status(500).json({ error: "File upload failed" });
   }
 });
 
-app.get("/download/:uri", (req: Request, res: Response) => {
+// Update /download/:uri endpoint to handle file downloads
+app.get("/download/:uri", async (req: Request, res: Response): Promise<void> => {
   const { uri } = req.params;
   const entry = urlStore[uri];
-  if (entry) {
-    res.redirect(entry.url);
-  } else {
+
+  if (!entry) {
     res.status(404).json({ error: "Download URL not found or expired" });
+    return; // Ensure the function returns void
+  }
+
+  try {
+    // Fetch the file from MinIO using the presigned URL
+    const downloadResponse = await fetch(entry.url);
+
+    if (!downloadResponse.ok) {
+      throw new Error("Failed to download file from MinIO");
+    }
+
+    const arrayBuffer = await downloadResponse.arrayBuffer(); // Get the file as an ArrayBuffer
+    const fileBuffer = Buffer.from(arrayBuffer); // Convert ArrayBuffer to Buffer
+
+    // Set the appropriate headers for the response
+    res.setHeader('Content-Type', downloadResponse.headers.get('Content-Type') || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${uri}"`); // Set the filename
+
+    res.send(fileBuffer); // Send the file buffer as the response
+  } catch (error) {
+    logger.error("Error downloading file: " + (error as Error).message);
+    res.status(500).json({ error: "File download failed" });
   }
 });
 
