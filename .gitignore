@@ -49,3 +49,5 @@ target/
 *.bak
 *.tmp
 *.old
+
+minio-server
