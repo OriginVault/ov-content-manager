@@ -1,4 +1,3 @@
-
 import { createC2pa, createTestSigner, ManifestBuilder } from "c2pa-node";
 import { getPrimaryDID, signVC, createResource, parentAgent, parentStore } from "@originvault/ov-id-sdk";
 import logger from "./logger";
@@ -13,6 +12,7 @@ import { co2 } from "@tgwf/co2";
 import blockhash from 'blockhash-core';
 import { v4 as uuidv4 } from 'uuid';
 import { Jimp, ResizeStrategy } from 'jimp';
+import crypto from "crypto";
 
 dotenv.config();
 
@@ -117,10 +117,10 @@ interface MulterRequest extends Request {
 const minioClient = new Minio.Client({
   endPoint: process.env.MINIO_ENDPOINT || "minio",
   port: parseInt(process.env.MINIO_PORT || "9000"),
-  useSSL: true,
   accessKey: process.env.MINIO_ROOT_USER || "minioadmin",
   secretKey: process.env.MINIO_ROOT_PASSWORD || "minioadmin",
-});
+  useSSL: true
+})
 
 const app = express();
 app.use(express.json());
@@ -133,7 +133,7 @@ app.use(cors({
 
     if (!origin) return callback(null, true); // Allow non-browser requests (like curl/postman)
 
-    const allowedPattern = /\.?originvault\.me$/;
+    const allowedPattern = /\.?originvault\.(me|co)$/;
 
     try {
       const { hostname } = new URL(origin);
@@ -176,6 +176,12 @@ function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
   });
 }
 
+function normalizeKey(did: string, name: string, revision: string) {
+  const safeDid = did.replace(/[:]/g, "_"); // turn `did:key:xyz` → `did_key_xyz`
+  const safeName = name.replace(/[^a-zA-Z0-9.\-_]/g, "_"); // file-safe
+  return `users/${safeDid}/uploads/${safeName}/${revision}`;
+}
+
 // Set up rate limiting
 const limiter = expressRateLimit({
   windowMs: 15 * 60 * 1000,
@@ -200,6 +206,8 @@ const uploadLimiter = expressRateLimit({
 export async function createContentRegistration(record: any, mnemonicId: string) {
   const resourceId = uuidv4();
   const resourceName = `content-registration-${mnemonicId}`.substring(0, 64);
+  console.log("signingDid", signingDid);
+  console.log("signingAgent", signingAgent);
   try {
     const result = await createResource({
         data: record,
@@ -228,7 +236,7 @@ async function writeIdentityAndMap({
   userDID,
   username,
   fileName,
-  fileId,
+  id,
   path,
   color,
   colorCode,
@@ -242,7 +250,7 @@ async function writeIdentityAndMap({
   userDID: string;
   username?: string;
   fileName: string;
-  fileId: string;
+  id: string;
   path: string;
   color?: string;
   colorCode?: string;
@@ -260,8 +268,8 @@ async function writeIdentityAndMap({
     precisePerceptualHash,
     userDID,
     username, // only relevant for public files
+    id,
     fileName,
-    fileId,
     path,
     createdAt: uploadedAt,
     status: "pending",
@@ -280,7 +288,8 @@ async function writeIdentityAndMap({
 
   // File map record
   const fileMapData = {
-    fileId,
+    id,
+    fileName,
     path,
     publicPath,
     uploadedAt,
@@ -298,7 +307,7 @@ async function writeIdentityAndMap({
   // If it's a public file => store in indexes/<username>/<fileId>.json
   // Else => store in indexes/<userDID>/file_map/<fileId>.json
   const indexBase = username ? `indexes/${username}` : `indexes/${userDID}/file_map`;
-  const fileMapPath = username ? `${indexBase}/${fileId}.json` : `${indexBase}/${fileId}.json`;
+  const fileMapPath = username ? `${indexBase}/${id}.json` : `${indexBase}/${id}.json`;
 
   await minioClient.putObject(
     BUCKET,
@@ -310,9 +319,6 @@ async function writeIdentityAndMap({
 
   return { identityPath, fileMapPath };
 }
-
-// 🆕 NEW: Actual hashing logic so we can't "trust" the client's claims
-import crypto from "crypto";
 
 /** Reproduces the front-end's file hashing: SHA-256 hex. */
 function computeSha256(buffer: Buffer): string {
@@ -405,7 +411,7 @@ app.post("/check-file-uploaded", async (req: Request, res: Response): Promise<vo
 
  const paths = {
   contentHash: `indexes/identities/${contentHash}.json`,
-  fileId: `indexes/identities/${fileId}.json`
+  id: `indexes/identities/${fileId}.json`
  }
 
  try {
@@ -418,12 +424,12 @@ app.post("/check-file-uploaded", async (req: Request, res: Response): Promise<vo
         res.status(200).json({ message: "This file is already uploaded by another user", existing: true, isOriginalOwner: false });
         return;
       } else {
-        res.status(200).json({ message: "File already uploaded", existing: true, fileId: metadata.fileId, isOriginalOwner: true });
+        res.status(200).json({ message: "File already uploaded", existing: true, fileId: metadata.id, isOriginalOwner: true });
         return;
       }
     }
   }
-  res.status(200).json({ message: "File not uploaded", existing: false, fileId: null, isOriginalOwner: undefined });
+  res.status(200).json({ message: "File not uploaded", existing: false, id: null, isOriginalOwner: undefined });
   return;
  } catch (error) {
   logger.error("Error checking file uploaded: " + (error as Error).message);
@@ -435,17 +441,17 @@ app.post("/check-file-uploaded", async (req: Request, res: Response): Promise<vo
 // ✅ Updated "request-upload-url" (private) — can remain as-is or rely on client's claims for now
 app.post("/request-upload-url", uploadLimiter as any, async (req: Request, res: Response): Promise<void> => {
   const {
-    fileName,
     userDID,
     contentHash,
     softPerceptualHash,
     mediumPerceptualHash,
     precisePerceptualHash,
     color,
-    colorCode
+    colorCode,
+    name
   } = req.body;
 
-  if (!fileName || !userDID || !contentHash || !softPerceptualHash || !mediumPerceptualHash || !precisePerceptualHash) {
+  if (!name || !userDID || !contentHash || !softPerceptualHash || !mediumPerceptualHash || !precisePerceptualHash) {
     res.status(400).json({ error: "Missing required fields" });
     return;
   }
@@ -470,13 +476,13 @@ app.post("/request-upload-url", uploadLimiter as any, async (req: Request, res: 
       );
 
       // Exclude sensitive information from the response
-      const { userDID: existinguserDID, fileId } = metadata;
+      const { userDID: existinguserDID, id } = metadata;
       if(userDID !== existinguserDID) {
         res.status(200).json({ message: "This file is already uploaded by another user", existing: true, isOriginalOwner: false });
         return;
       }
 
-      res.status(200).json({ message: "File already uploaded", existing: true, fileId, isOriginalOwner: true });
+      res.status(200).json({ message: "File already uploaded", existing: true, id, isOriginalOwner: true });
       return;
     }
 
@@ -491,8 +497,8 @@ app.post("/request-upload-url", uploadLimiter as any, async (req: Request, res: 
     }
 
     const fileId = generateSnowflakeId();
-    const filePath = `users/${userDID}/uploads/${fileName}/${fileId}`;
-    const upload_url = await minioClient.presignedPutObject(BUCKET, filePath, 60);
+    const filePath = `users/${userDID}/uploads/${name}/${fileId}`;
+    const uploadUrl = await minioClient.presignedGetObject(BUCKET, filePath, 60); // expires in 60s
     const mnemonicId = snowflakeToMnemonic(fileId);
     // We create identity & map, but they're still "unverified" until the real file arrives
     await writeIdentityAndMap({
@@ -501,15 +507,16 @@ app.post("/request-upload-url", uploadLimiter as any, async (req: Request, res: 
       mediumPerceptualHash,
       precisePerceptualHash,
       userDID: userDID,
-      fileName,
-      fileId,
+      fileName: name,
+      id: fileId,
       path: filePath,
       color,
       colorCode,
       mnemonicId
     });
 
-    res.status(200).json({ upload_url, fileId });
+    console.log('uploadUrl', uploadUrl)
+    res.status(200).json({ uploadUrl, fileId });
     return;
   } catch (error) {
     logger.error("Error getting presigned url: " + (error as Error).message);
@@ -575,8 +582,8 @@ app.post("/request-public-upload-url", uploadLimiter as any, async (req: Request
     const publicPath = `public/${username}/${fileId}`;
     const mnemonicId = snowflakeToMnemonic(fileId);
     // For public usage, we give them both private & public presigned URLs
-    const private_upload_url = await minioClient.presignedPutObject(BUCKET, privatePath, 60);
-    const public_upload_url = await minioClient.presignedPutObject(BUCKET, publicPath, 60);
+    const private_upload_url = await minioClient.presignedPutObject(BUCKET, normalizeKey(userDID, fileName, fileId), 60);
+    const public_upload_url = await minioClient.presignedPutObject(BUCKET, normalizeKey(username, fileName, fileId), 60);
 
     // Just store the identity + map with the final public path
     await writeIdentityAndMap({
@@ -587,7 +594,7 @@ app.post("/request-public-upload-url", uploadLimiter as any, async (req: Request
       userDID,
       username,
       fileName,
-      fileId,
+      id: fileId,
       path: privatePath,
       publicPath,
       color,
@@ -665,7 +672,7 @@ app.post("/upload/:uri", uploadLimiter as any, upload.single("file"), async (req
         logger.warn(
           `⚠️ Potential duplicate:
            newFile => contentHash:${contentHash}, mediumHash:${mediumPerceptualHash}, preciseHash:${precisePerceptualHash}
-           existing => fileId:${record.fileId}, userDID:${record.userDID}, fileName:${record.fileName}
+           existing => fileId:${record.id}, userDID:${record.userDID}, fileName:${record.fileName}
            distances => medium:${mediumDist}, precise:${preciseDist}`
         );
       }
@@ -910,7 +917,7 @@ app.post("/sign", async (req: Request, res: Response): Promise<void> => {
             label: "com.custom.ballin",
             size: 98765,
             location: {
-              url: "https://resolver.cheqd.net/1.0/identifiers/did:cheqd:mainnet:280dd37c-aa96-5e71-8548-5125505a968e/resources/b3612976-27bd-539e-99fc-c339e3a1be80",
+              url: "https://resolver.originvault.box/1.0/identifiers/did:cheqd:mainnet:280dd37c-aa96-5e71-8548-5125505a968e/resources/b3612976-27bd-539e-99fc-c339e3a1be80",
               alg: "sha256",
               hash: "zP84FPSremIrAQHlhw+hRYQdZp/+KggnD0W8opXlIQQ=",
             },
@@ -1025,8 +1032,8 @@ app.get("/bucket_exists", async (req: Request, res: Response): Promise<void> => 
 app.post("/request-download-url", async (req: Request, res: Response): Promise<void> => {
   const { fileName } = req.body;
   try {
-    const download_url = await minioClient.presignedGetObject(BUCKET, fileName, 2000);
-    res.json({ download_url });
+    const downloadUrl = await minioClient.presignedGetObject(BUCKET, fileName, 2000);
+    res.json({ downloadUrl });
   } catch (error) {
     logger.error("Error getting presigned url: " + (error as Error).message);
     res.status(500).json({ error: "Presigned url retrieval failed" });
@@ -1103,7 +1110,6 @@ app.get("/list_user_files/:userDID", async (req: Request, res: Response): Promis
 
       // Only return image files with preview URLs
       const previewUrl = await minioClient.presignedGetObject(BUCKET, obj.name, 60); // expires in 60s
-
       fileList.push({
         name: nameWithoutPrefix,
         size: obj.size,
@@ -1135,17 +1141,40 @@ app.get("/list_public_files", async (req: Request, res: Response): Promise<void>
 
       // Only return image files with preview URLs
       const previewUrl = await minioClient.presignedGetObject(BUCKET, obj.name, 60); // expires in 60s
+      // Get the identity data to include the filename
+      try {
+        // Find the identity file for this content
+        const identityPath = `indexes/identities/${snowflakeId}.json`;
+        const identityStream = await minioClient.getObject(BUCKET, identityPath).catch(() => null);
+        
+        let fileName = null;
+        if (identityStream) {
+          const identityData = JSON.parse((await streamToBuffer(identityStream)).toString());
+          fileName = identityData.fileName;
+        }
 
-
-      fileList.push({
-        name: nameWithoutPrefix,
-        etag: obj.etag,
-        size: obj.size,
-        lastModified: obj.lastModified,
-        mnemonicId: mnemonic,
-        id: snowflakeId,
-        previewUrl,
-      });
+        fileList.push({
+          name: nameWithoutPrefix,
+          etag: obj.etag,
+          size: obj.size,
+          lastModified: obj.lastModified,
+          mnemonicId: mnemonic,
+          id: snowflakeId,
+          previewUrl,
+          fileName: fileName // Include the filename from identity
+        });
+      } catch (error) {
+        // If we can't get the identity, still include the file but without filename
+        fileList.push({
+          name: nameWithoutPrefix,
+          etag: obj.etag,
+          size: obj.size,
+          lastModified: obj.lastModified,
+          mnemonicId: mnemonic,
+          id: snowflakeId,
+          previewUrl
+        });
+      }
     }
     res.json(fileList);
     return;
@@ -1191,7 +1220,8 @@ app.get("/list_public_manifests", async (req: Request, res: Response): Promise<v
 app.get("/get_public_manifest/:manifestId", async (req: Request, res: Response): Promise<void> => {
   const { manifestId } = req.params;
   const manifest = await minioClient.getObject(BUCKET, `public/manifests/${manifestId}`);
-  res.json(manifest);
+  const previewUrl = await minioClient.presignedGetObject(BUCKET, `public/manifests/${manifestId}`, 60); // expires in 60s
+  res.json({ manifest, previewUrl });
   return;
 });
 
@@ -1211,16 +1241,52 @@ app.get("/get_user_public_files/:username", async (req: Request, res: Response):
         // Only return image files with preview URLs
         const previewUrl = await minioClient.presignedGetObject(BUCKET, obj.name, 60); // expires in 60s
 
+        // Get the identity data to include the filename
+        try {
+          // First try to get the file map which has the identity reference
+          const fileMapPath = `indexes/${username}/${snowflakeId}.json`;
+          const fileMapStream = await minioClient.getObject(BUCKET, fileMapPath).catch(() => null);
+          
+          let fileName = null;
+          let identityData = null;
+          
+          if (fileMapStream) {
+            const fileMapData = JSON.parse((await streamToBuffer(fileMapStream)).toString());
+            const identityPath = fileMapData.identityRef;
+            
+            if (identityPath) {
+              const identityStream = await minioClient.getObject(BUCKET, identityPath).catch(() => null);
+              if (identityStream) {
+                identityData = JSON.parse((await streamToBuffer(identityStream)).toString());
+                fileName = identityData.fileName;
+              }
+            }
+          }
 
-        fileList.push({
-          name: nameWithoutPrefix,
-          etag: obj.etag,
-          size: obj.size,
-          lastModified: obj.lastModified,
-          mnemonicId: mnemonic,
-          id: snowflakeId,
-          previewUrl,
-        });
+          fileList.push({
+            name: nameWithoutPrefix,
+            etag: obj.etag,
+            size: obj.size,
+            lastModified: obj.lastModified,
+            mnemonicId: mnemonic,
+            id: snowflakeId,
+            previewUrl,
+            fileName: fileName, // Include the filename from identity
+            color: identityData?.color,
+            colorCode: identityData?.colorCode
+          });
+        } catch (error) {
+          // If we can't get the identity, still include the file but without filename
+          fileList.push({
+            name: nameWithoutPrefix,
+            etag: obj.etag,
+            size: obj.size,
+            lastModified: obj.lastModified,
+            mnemonicId: mnemonic,
+            id: snowflakeId,
+            previewUrl
+          });
+        }
       }
       res.json(fileList);
       return;
@@ -1269,7 +1335,8 @@ app.get("/list_user_manifests/:userDID", async (req: Request, res: Response): Pr
 app.get("/get_manifest/:manifestId", async (req: Request, res: Response): Promise<void> => {
   const { manifestId } = req.params;
   const manifest = await minioClient.getObject(BUCKET, manifestId);
-  res.json(manifest);
+  const previewUrl = await minioClient.presignedGetObject(BUCKET, manifestId, 60); // expires in 60s
+  res.json({ manifest, previewUrl });
   return;
 });
 
@@ -1285,7 +1352,8 @@ app.post("/save_user_manifest_draft", async (req: Request, res: Response): Promi
 app.get("/get_user_manifest_draft/:userDID/:uploadId/:manifestId", async (req: Request, res: Response): Promise<void> => {
   const { userDID, uploadId, manifestId } = req.params;
   const manifest = await minioClient.getObject(BUCKET, `${userDID}/drafts/uploads/${uploadId}/${manifestId}`);
-  res.json(manifest);
+  const previewUrl = await minioClient.presignedGetObject(BUCKET, `${userDID}/drafts/uploads/${uploadId}/${manifestId}`, 60); // expires in 60s
+  res.json({ manifest, previewUrl });
   return;
 });
 
@@ -1294,7 +1362,8 @@ app.get("/get_stored_content_and_manifest_draft/:userDID/:uploadId", async (req:
   const { userDID, uploadId } = req.params;
   const content = await minioClient.getObject(BUCKET, `${userDID}/uploads/${uploadId}`);
   const manifest = await minioClient.getObject(BUCKET, `${userDID}/drafts/uploads/${uploadId}`);
-  res.json({ content, manifest });
+  const previewUrl = await minioClient.presignedGetObject(BUCKET, `${userDID}/uploads/${uploadId}`, 60); // expires in 60s
+  res.json({ content, manifest, previewUrl });
   return;
 });
 
@@ -1326,7 +1395,8 @@ app.get("/get_signed_user_file/:userDID/:fileId", async (req: Request, res: Resp
   const prefix = `signed-users/${userDID}/`;
   try {
     const file = await minioClient.getObject(BUCKET, `${prefix}${fileId}`);
-    res.json(file);
+    const previewUrl = await minioClient.presignedGetObject(BUCKET, `${prefix}${fileId}`, 60); // expires in 60s
+    res.json({ file, previewUrl });
     return;
   } catch (error) {
     logger.error("Error getting signed user file: " + (error as Error).message);
@@ -1379,18 +1449,15 @@ app.post("/get_public_file_by_mnemonic", async (req: Request, res: Response): Pr
   const { mnemonic, username } = req.body;
   try {
     const fileId = mnemonicToSnowflake(mnemonic);
-    console.log("fileId", fileId);
+
     const fileMapStream = await minioClient.getObject(BUCKET, `indexes/${username}/${fileId}.json`);
     let fileMapData = "";
     fileMapStream.on("data", (chunk) => {
       fileMapData += chunk;
     });
     fileMapStream.on("end", async () => {
-      console.log("fileMapData", fileMapData);
       const fileMetadata = JSON.parse(fileMapData);
-      console.log("fileMetadata", fileMetadata);
       const downloadUrl = await minioClient.presignedGetObject(BUCKET, fileMetadata.path, 60);
-      console.log("downloadUrl", downloadUrl);
       res.json({ fileId, downloadUrl });
       return;
     });
@@ -1515,7 +1582,8 @@ app.post("/publish-private-file", uploadLimiter as any, async (req: Request, res
     
     // 9. Create a public file map entry
     const publicFileMapData = {
-      fileId,
+      id: fileId,
+      name: fileName,
       path: publicPath,
       uploadedAt: new Date().toISOString(),
       identityRef: identityPath,
@@ -1535,11 +1603,11 @@ app.post("/publish-private-file", uploadLimiter as any, async (req: Request, res
     
     // 10. Generate a presigned URL for the public file
     const publicUrl = await minioClient.presignedGetObject(BUCKET, publicPath, 60 * 60); // 1 hour expiry
-    
     res.status(200).json({
       message: "File published successfully",
-      fileId,
-      publicPath,
+      id: fileId,
+      name: fileName,
+      path: publicPath,
       publicUrl,
       mnemonicId: snowflakeToMnemonic(fileId)
     });

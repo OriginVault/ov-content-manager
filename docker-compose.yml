@@ -2,6 +2,8 @@ services:
   minio:
     image: minio/minio
     container_name: minio
+    networks:
+      - ov-network
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -19,12 +21,20 @@ services:
 
   c2pa:
     build: ./c2pa-server
+    volumes:
+      - ./etc/minio/certs/public.crt:/root/.c2pa-server/certs/public.crt:ro
+      - ./etc/minio/certs/private.key:/root/.c2pa-server/certs/private.key:ro
+      - ./.originvault-cheqd-did-keyring.json:/root/.originvault-cheqd-did-keyring.json
+      - ./.originvault-encryption-key:/root/.originvault-encryption-key
+      - ./.originvault-primary-did-wallet.json:/root/.originvault-primary-did-wallet.json
     ports:
       - "8080:8080"
+    networks:
+      - ov-network
     depends_on:
       minio:
         condition: service_healthy
 
 networks:
-  c2pa-network:
+  ov-network:
     driver: bridge
