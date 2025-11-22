@@ -1,39 +1,77 @@
 services:
-  minio:
-    image: minio/minio
-    container_name: minio
+  seaweed:
+    image: chrislusf/seaweedfs:latest
+    container_name: seaweed
     networks:
       - ov-network
     ports:
-      - "9000:9000"
-      - "9001:9001"
-    environment:
-      MINIO_ROOT_USER: minioadmin  
-      MINIO_ROOT_PASSWORD: minioadmin
+      - "8333:8333" # S3 gateway
     volumes:
-      - ./minio-server/data:/data
-    command: server /data --console-address ":9001"
+      - ./seaweedfs/data:/data
+      - ./seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro
+    command: server -dir=/data -s3 -s3.port=8333 -s3.config=/etc/seaweedfs/s3.json -filer=true
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: ["CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' http://localhost:8333/ | grep -qE '200|403|405'"]
       interval: 30s
       timeout: 10s
       retries: 3
 
   c2pa:
-    build: ./c2pa-server
+    image: originvault/ov-content-manager-c2pa:latest
+    container_name: storage-server
+    env_file:
+      - .env
     volumes:
-      - ./etc/minio/certs/public.crt:/root/.c2pa-server/certs/public.crt:ro
-      - ./etc/minio/certs/private.key:/root/.c2pa-server/certs/private.key:ro
-      - ./.originvault-cheqd-did-keyring.json:/root/.originvault-cheqd-did-keyring.json
-      - ./.originvault-encryption-key:/root/.originvault-encryption-key
-      - ./.originvault-primary-did-wallet.json:/root/.originvault-primary-did-wallet.json
-    ports:
-      - "8080:8080"
+      - ./.originvault-cheqd-did-keyring.json:/root/.originvault-cheqd-did-keyring.json:ro
+      - ./.originvault-encryption-key:/root/.originvault-encryption-key:ro
+      - ./.originvault-primary-did-wallet.json:/root/.originvault-primary-did-wallet.json:ro
     networks:
       - ov-network
     depends_on:
-      minio:
+      seaweed:
         condition: service_healthy
+    environment:
+      - NODE_ENV=production
+      - MINIO_ENDPOINT=seaweed
+      - MINIO_PORT=8333
+      - MINIO_USE_SSL=false
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+      - MINIO_BUCKET=ov-content-manager-uploads
+      # Anonymous Upload Configuration
+      - ANON_MAX_UPLOADS_PER_IP=3
+      - ANON_MAX_FILE_SIZE_MB=10
+      - ANON_UPLOAD_TTL_HOURS=24
+      - ANON_BUCKET_DID=${ANON_BUCKET_DID:-did:cheqd:mainnet:anonymous-bucket-did-here}
+      # Storage Service Configuration
+      - STORAGE_SERVICE_URL=${STORAGE_SERVICE_URL:-https://storage.originvault.box}
+      # Cheqd Studio Integration
+      - CHEQD_NETWORK=${CHEQD_NETWORK:-mainnet}
+      - CHEQD_STUDIO_BASE_URL=${CHEQD_STUDIO_BASE_URL:-https://studio.cheqd.io}
+      - CHEQD_STUDIO_TOKEN=${CHEQD_STUDIO_TOKEN}
+      - CHEQD_STUDIO_CUSTOMER_ID=${CHEQD_STUDIO_CUSTOMER_ID}
+      - ORIGINVAULT_STORAGE_DID=${ORIGINVAULT_STORAGE_DID}
+      # Logto OIDC Authentication
+      - LOGTO_BASE_URL=${LOGTO_BASE_URL:-https://auth.originvault.box}
+      - LOGTO_ISSUER=${LOGTO_ISSUER:-https://auth.originvault.box}
+      - LOGTO_JWKS_URI=${LOGTO_JWKS_URI:-https://auth.originvault.box/.well-known/jwks.json}
+      - LOGTO_ALLOWED_AUDIENCES=${LOGTO_ALLOWED_AUDIENCES:-ov-public-utility-tool,ov-content-manager}
+      - LOGTO_ALLOWED_CLIENT_IDS=${LOGTO_ALLOWED_CLIENT_IDS}
+      # Security & Rate Limiting
+      - HCAPTCHA_SECRET=${HCAPTCHA_SECRET}
+      - RATE_LIMIT_STORE=${RATE_LIMIT_STORE:-memory}
+      - REDIS_URL=${REDIS_URL:-redis://localhost:6379}
+      # User Upload Configuration
+      - USER_MAX_FILE_SIZE_MB=${USER_MAX_FILE_SIZE_MB:-100}
+      - USER_MAX_BUCKET_SIZE_GB=${USER_MAX_BUCKET_SIZE_GB:-10}
+      - PRESIGN_DEFAULT_EXPIRY_SECONDS=${PRESIGN_DEFAULT_EXPIRY_SECONDS:-900}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
 networks:
   ov-network:

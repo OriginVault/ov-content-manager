@@ -1,0 +1,34 @@
+{
+  "name": "@originvault/ov-c2pa",
+  "version": "0.2.0",
+  "description": "Complete C2PA toolkit with low-level and high-level APIs for signing, verification, and manifest generation",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rimraf dist"
+  },
+  "dependencies": {
+    "c2pa-node": "^0.5.23",
+    "node-forge": "^1.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.9",
+    "@types/node-forge": "^1.3.11",
+    "rimraf": "^6.0.1",
+    "typescript": "^5.8.2"
+  },
+  "author": "OriginVault",
+  "license": "MIT"
+}
+

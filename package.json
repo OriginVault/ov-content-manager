@@ -1,0 +1,18 @@
+{
+  "name": "ov-content-manager-monorepo",
+  "private": true,
+  "packageManager": "npm@10.8.2",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "test:inband": "turbo run test --concurrency=1 -- --runInBand"
+  },
+  "devDependencies": {
+    "turbo": "^2.1.1"
+  }
+}
+
+

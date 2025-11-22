@@ -1,4 +1,4 @@
-import { snowflakeToMnemonic, mnemonicToSnowflake, generateSnowflakeId } from '../c2pa-server/src/generateSnowflakeId';
+import { snowflakeToMnemonic, mnemonicToSnowflake, generateSnowflakeId } from '../storage-server/src/generateSnowflakeId.js';
 import chalk from 'chalk';
 
 // Test the conversion of Snowflake ID to Mnemonic and back

@@ -7,19 +7,19 @@
 
 ## Overview
 
-The OriginVault Content Manager is a content management system built on MinIO, designed to ensure content authenticity through C2PA integration. This project offers:
+The OriginVault Content Manager is a content management system built on an S3-compatible store (SeaweedFS S3 gateway), designed to ensure content authenticity through C2PA integration. This project offers:
 
-- **Secure file storage** using MinIO
+- **Secure file storage** using SeaweedFS S3 gateway
 - **C2PA signing & verification** for content authenticity
 - **Presigned URL-based access** for enhanced security
 
 ## Features
 
-- 📂 **MinIO** for object storage
+- 📂 **SeaweedFS S3** for object storage
 - 🔏 **C2PA integration** for signing and verifying media
 - 🔗 **Presigned URLs** for secure file uploads and downloads
 - 🚀 **Docker-based deployment** for easy setup
-- 🔄 **Automatic retries & health checks** for MinIO connectivity
+- 🔄 **Automatic retries & health checks** for S3 connectivity
 
 ## Installation
 
@@ -34,8 +34,8 @@ The OriginVault Content Manager is a content management system built on MinIO, d
 1. **Clone the Repository**
 
    ```bash
-   git clone https://github.com/OriginVault/originvault-c2pa-server.git
-   cd originvault-c2pa-server
+   git clone https://github.com/OriginVault/originvault-storage-server.git
+   cd originvault-storage-server
    ```
 
 2. **Set Up Environment Variables**
@@ -45,8 +45,9 @@ The OriginVault Content Manager is a content management system built on MinIO, d
    ```plaintext
    MINIO_ROOT_USER=admin
    MINIO_ROOT_PASSWORD=secretpassword
-   MINIO_ENDPOINT=minio
-   MINIO_PORT=9000
+   MINIO_ENDPOINT=seaweed
+   MINIO_PORT=8333
+   MINIO_USE_SSL=false
    ```
 
 3. **Start the Server**
@@ -57,18 +58,14 @@ The OriginVault Content Manager is a content management system built on MinIO, d
    docker compose up --build
    ```
 
-   This will start MinIO and the C2PA server.
+   This will start the SeaweedFS S3 gateway and the C2PA server.
 
-4. **Verify MinIO is Running**
+4. **Verify SeaweedFS S3 is Running**
 
-   Access the MinIO Web UI at: [http://localhost:9090](http://localhost:9090)
-
-   Login with the credentials from your `.env` file.
-
-   To verify the API:
+   Test the S3 gateway port:
 
    ```bash
-   curl -f http://localhost:9000/minio/health/live
+   curl -I http://localhost:8333
    ```
 
 ## API Usage
@@ -95,36 +92,36 @@ The OriginVault Content Manager is a content management system built on MinIO, d
 
 ## Troubleshooting
 
-- **MinIO API is Not Accessible**
+- **SeaweedFS S3 Gateway is Not Accessible**
 
-  Check if MinIO is running:
+  Check if the service is running:
 
   ```bash
   docker ps
   ```
 
-  Restart MinIO:
+  Restart SeaweedFS S3 gateway:
 
   ```bash
-  docker compose restart minio
+  docker compose restart seaweed
   ```
 
-  Verify MinIO from inside the C2PA container:
+  Verify S3 from inside the C2PA container:
 
   ```bash
-  docker exec -it c2pa-1 sh
-  curl -f http://minio:9000/minio/health/live
+  docker exec -it storage-server sh
+  curl -I http://seaweed:8333
   ```
 
-- **C2PA Cannot Connect to MinIO**
+- **C2PA Cannot Connect to S3**
 
   Modify `config.js` to use the correct service name:
 
   ```javascript
   const minioClient = new Minio.Client({
-    endPoint: process.env.MINIO_ENDPOINT || "minio",
-    port: parseInt(process.env.MINIO_PORT, 10) || 9000,
-    useSSL: false,
+    endPoint: process.env.MINIO_ENDPOINT || "seaweed",
+    port: parseInt(process.env.MINIO_PORT, 10) || 8333,
+    useSSL: (process.env.MINIO_USE_SSL || "false").toLowerCase() === "true",
     accessKey: process.env.MINIO_ROOT_USER,
     secretKey: process.env.MINIO_ROOT_PASSWORD,
   });
@@ -135,20 +132,7 @@ The OriginVault Content Manager is a content management system built on MinIO, d
   ```bash
   docker compose restart c2pa
   ```
-
-- **MinIO API Redirects to Console (Port 9001)**
-
-  Modify `docker-compose.yml`:
-
-  ```yaml
-  command: server /data --console-address ":9090"
-  ```
-
-  Then restart:
-
-  ```bash
-  docker compose down && docker compose up --build
-  ```
+  
 
 ## Contributing
 

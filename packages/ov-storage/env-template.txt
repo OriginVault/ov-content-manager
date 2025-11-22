@@ -1,0 +1,77 @@
+# SeaweedFS S3 Configuration (S3-compatible)
+# Prefer S3_* names; MINIO_* are still supported for compatibility
+S3_ENDPOINT=seaweed
+S3_PORT=8333
+S3_USE_SSL=false
+S3_ACCESS_KEY_ID=minioadmin
+S3_SECRET_ACCESS_KEY=minioadmin
+S3_BUCKET=ov-content-manager-uploads
+
+# Back-compat (optional):
+MINIO_ENDPOINT=seaweed
+MINIO_PORT=8333
+MINIO_USE_SSL=false
+MINIO_ROOT_USER=minioadmin
+MINIO_ROOT_PASSWORD=minioadmin
+MINIO_BUCKET=ov-content-manager-uploads
+
+# C2PA Configuration
+NODE_ENV=production
+
+# Cheqd DID Configuration
+COSMOS_PAYER_SEED=your_cosmos_payer_seed_here
+PARENT_DID_RECOVERY_PHRASE=your_parent_did_recovery_phrase_here
+ORIGIN_VAULT_DID_PASSWORD=your_origin_vault_did_password_here
+
+# Snowflake ID Configuration
+SNOWFLAKE_DID=your_snowflake_did_here
+SNOWFLAKE_WORKER_ID=1
+SNOWFLAKE_DATACENTER_ID=1
+SNOWFLAKE_EPOCH=1735689600000
+
+# Server Configuration
+PORT=8080
+
+# Anonymous Upload Configuration
+ANON_MAX_UPLOADS_PER_IP=3
+ANON_MAX_FILE_SIZE_MB=10
+ANON_UPLOAD_TTL_HOURS=24
+ANON_BUCKET_DID=did:cheqd:mainnet:anonymous-bucket-did-here
+
+# Storage Service Configuration
+STORAGE_SERVICE_URL=https://storage.originvault.box
+
+# Cheqd Studio Integration
+CHEQD_NETWORK=mainnet
+CHEQD_STUDIO_BASE_URL=https://studio.cheqd.io
+CHEQD_STUDIO_CUSTOMER_ID=your_originvault_customer_wallet_id_here
+ORIGINVAULT_STORAGE_DID=did:cheqd:mainnet:56819627-8b2e-57a6-aeca-e6c87b30a907
+
+# Logto OIDC Authentication
+# App credentials (required to identify the app to Logto)
+LOGTO_APP_ID=your_content_manager_app_id
+LOGTO_APP_SECRET=your_content_manager_app_secret
+LOGTO_TOKEN_ENDPOINT=https://auth.originvault.box/oidc/token
+LOGTO_REDIRECT_URI=http://localhost:8080/auth/callback
+
+# Server configuration
+LOGTO_ENDPOINT=https://auth.originvault.box
+LOGTO_ISSUER=https://auth.originvault.box
+LOGTO_JWKS_URI=https://auth.originvault.box/.well-known/jwks.json
+LOGTO_ALLOWED_AUDIENCES=ov-public-utility-tool,ov-content-manager
+LOGTO_CLIENT_IDS=your_logto_client_ids_here
+LOGTO_REQUIRED_SCOPES=read:files,write:files,read:storage,write:storage,read:manifests,write:manifests,register:content
+
+# Alternative variable names (for backward compatibility)
+LOGTO_BASE_URL=https://auth.originvault.box
+LOGTO_ALLOWED_CLIENT_IDS=your_logto_client_ids_here
+
+# Security & Rate Limiting
+HCAPTCHA_SECRET=your_hcaptcha_secret_here
+RATE_LIMIT_STORE=memory
+REDIS_URL=redis://localhost:6379
+
+# User Upload Configuration
+USER_MAX_FILE_SIZE_MB=100
+USER_MAX_BUCKET_SIZE_GB=10
+PRESIGN_DEFAULT_EXPIRY_SECONDS=900
